@@ -20,8 +20,8 @@ import yfinance as yf
 
 # === 1) GitHub raw URL 설정 (반드시 latest_*.csv를 가리키도록!) ===
 # 아래 두 줄을 네 GitHub 주소에 맞게 정확히 바꿔줘야 한다.
-RS_URL = "https://raw.githubusercontent.com/네아이디/us-ibd-cloud/main/data/latest_rs_smr.csv"
-IND_URL = "https://raw.githubusercontent.com/네아이디/us-ibd-cloud/main/data/latest_industry_rs.csv"
+RS_URL = "https://raw.githubusercontent.com/mbkk7ch6kh-hub/us-ibd-cloud/main/data/latest_rs_smr.csv"
+IND_URL = "https://raw.githubusercontent.com/mbkk7ch6kh-hub/us-ibd-cloud/main/data/latest_industry_rs.csv"
 
 
 # === 2) 비밀번호 잠금 로직 ===
