@@ -1,9 +1,13 @@
 # rs_dashboard_online.py
 #
-# 온라인용 US IBD 스타일 대시보드
+# 온라인용 US IBD 스타일 대시보드 (RS + 산업군 RS + SMR)
 # - GitHub에 올라간 latest_rs_smr.csv / latest_industry_rs.csv 읽기
 # - 비밀번호(secrets.APP_PASSWORD) 잠금
 # - 개별 RS + 산업군 RS + SMR + TradingView + 분기 재무제표
+#
+# *** 중요 변경점 ***
+# 1) RS/산업군 CSV 로딩에서 @st.cache_data 제거 → 항상 최신 파일을 다시 읽도록
+# 2) 실제로 읽힌 컬럼들을 DEBUG 영역에 표시 → SMR 컬럼 포함 여부 눈으로 확인 가능
 
 from __future__ import annotations
 
@@ -14,25 +18,31 @@ import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
 
-# === 1) GitHub raw URL 설정 (여기를 너의 주소로 바꿔줘) ===
-RS_URL = "https://raw.githubusercontent.com/mbkk7ch6kh-hub/us-ibd-cloud/refs/heads/main/data/latest_rs_smr.csv"
-IND_URL = "https://raw.githubusercontent.com/mbkk7ch6kh-hub/us-ibd-cloud/refs/heads/main/data/latest_industry_rs.csv"
+# === 1) GitHub raw URL 설정 (반드시 latest_*.csv를 가리키도록!) ===
+# 아래 두 줄을 네 GitHub 주소에 맞게 정확히 바꿔줘야 한다.
+RS_URL = "https://raw.githubusercontent.com/네아이디/us-ibd-cloud/main/data/latest_rs_smr.csv"
+IND_URL = "https://raw.githubusercontent.com/네아이디/us-ibd-cloud/main/data/latest_industry_rs.csv"
 
 
 # === 2) 비밀번호 잠금 로직 ===
 def check_password() -> bool:
     """간단한 1인용 비밀번호 보호."""
+    # 시크릿 체크 (없으면 친절히 에러)
+    if "APP_PASSWORD" not in st.secrets:
+        st.error(
+            "서버에 APP_PASSWORD 시크릿이 설정되어 있지 않습니다.\n"
+            "Streamlit Cloud → Settings → Secrets에서 APP_PASSWORD 를 지정해 주세요."
+        )
+        return False
+
     def password_entered():
-        # 입력한 비밀번호가 secrets에 저장된 비밀번호와 같으면 통과
         if st.session_state["password"] == st.secrets["APP_PASSWORD"]:
             st.session_state["password_ok"] = True
-            # 입력값은 바로 제거
             del st.session_state["password"]
         else:
             st.session_state["password_ok"] = False
 
     if "password_ok" not in st.session_state:
-        # 첫 진입
         st.text_input(
             "비밀번호를 입력하세요",
             type="password",
@@ -41,20 +51,19 @@ def check_password() -> bool:
         )
         return False
     elif not st.session_state["password_ok"]:
-        # 이전에 틀린 상태
         st.text_input(
             "비밀번호가 틀렸습니다. 다시 입력하세요",
             type="password",
             key="password",
             on_change=password_entered,
         )
+        st.error("비밀번호가 틀렸습니다.")
         return False
     else:
         return True
 
 
-# === 3) 데이터 로딩 함수 (GitHub에서 바로 읽기) ===
-@st.cache_data
+# === 3) 데이터 로딩 함수 (캐시 제거 → 항상 최신 파일 사용) ===
 def load_rs_from_cloud() -> pd.DataFrame:
     df = pd.read_csv(RS_URL)
     df.columns = [c.strip().lower() for c in df.columns]
@@ -63,7 +72,6 @@ def load_rs_from_cloud() -> pd.DataFrame:
     return df
 
 
-@st.cache_data
 def load_industry_from_cloud() -> pd.DataFrame | None:
     try:
         df = pd.read_csv(IND_URL)
@@ -83,7 +91,6 @@ def load_quarterly_financials(ticker: str) -> Tuple[pd.DataFrame, pd.DataFrame, 
     bs_q : 분기 재무상태표
     cf_q : 분기 현금흐름표
     """
-
     def tidy(df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
             return pd.DataFrame()
@@ -140,10 +147,17 @@ def main():
     industry_df = load_industry_from_cloud()
 
     if rs_df is None or rs_df.empty:
-        st.error("RS 데이터(rs_onil_all_*.csv)를 불러오지 못했습니다. GitHub data 폴더를 확인해 주세요.")
+        st.error("RS 데이터(latest_rs_smr.csv)를 불러오지 못했습니다. GitHub data 폴더를 확인해 주세요.")
         return
 
-    st.caption("데이터 출처: GitHub latest_rs_smr.csv / latest_industry_rs.csv")
+    st.caption(
+        "데이터 출처: GitHub latest_rs_smr.csv / latest_industry_rs.csv\n"
+        f"RS_URL = {RS_URL}"
+    )
+
+    # 🔍 DEBUG: 실제 컬럼들 표시 (SMR 들어왔는지 눈으로 확인)
+    with st.expander("DEBUG: RS 데이터 컬럼 보기", expanded=False):
+        st.write(rs_df.columns.tolist())
 
     total_count = len(rs_df)
 
@@ -157,7 +171,7 @@ def main():
         )
         return
 
-    # 선택 컬럼 기본값
+    # SMR/산업군 관련 컬럼이 없어도 코드가 죽지 않도록 기본 생성
     optional_cols = [
         "sector",
         "industry",
@@ -414,7 +428,6 @@ def main():
             height=350,
         )
 
-        # 산업군 테이블 (있으면)
         if industry_df is not None and not industry_df.empty:
             st.subheader("산업군 RS / 랭크 / 등급 목록")
 
