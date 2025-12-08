@@ -2,6 +2,7 @@
 enrich_smr.py
 
 - 최신 RS 원본 파일(rs_onil_all_YYYYMMDD.csv)을 찾는다.
+- 티커 컬럼 이름이 무엇이든(symbol, ticker, TICKER, code 등) 자동으로 인식해서 'symbol'로 통일한다.
 - smr_factors.csv가 있으면, 거기 있는 매출성장/이익률/ROE로 SMR 점수/등급을 계산해서 병합.
 - smr_factors.csv가 없으면, 경고만 찍고
   RS 원본에 SMR 관련 컬럼(전부 None)을 추가한 뒤 저장하고 정상 종료한다.
@@ -54,6 +55,8 @@ def load_smr_factors() -> pd.DataFrame | None:
 
     # 최소한 symbol 컬럼이 있어야 함
     if "symbol" not in df.columns:
+        # 혹시 다른 이름으로 되어 있다면 여기서도 한번 더 처리할 수 있지만,
+        # 기본 버전에서는 symbol 컬럼을 요구하도록 둔다.
         raise ValueError("smr_factors.csv 에 'symbol' 컬럼이 없습니다.")
 
     print(f"[INFO] smr_factors.csv 로딩 완료. 행 수: {len(df)}")
@@ -112,6 +115,39 @@ def compute_smr_score(df: pd.DataFrame) -> pd.DataFrame:
     return work
 
 
+def normalize_symbol_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    RS 원본 파일에서 'symbol' 컬럼이 없을 경우,
+    ticker / TICKER / code / Code / Symbol 같은 후보 컬럼을 찾아서 'symbol'로 통일한다.
+    하나도 찾지 못하면 ValueError.
+    """
+    if "symbol" in df.columns:
+        return df
+
+    # 후보 컬럼 이름들 (소문자 기준)
+    candidates_lower = ["symbol", "ticker", "code", "종목코드", "secid"]
+
+    col_map = {c.lower(): c for c in df.columns}
+
+    found_col = None
+    for c_low in candidates_lower:
+        if c_low in col_map:
+            found_col = col_map[c_low]
+            break
+
+    if found_col is None:
+        raise ValueError(
+            f"RS 원본 파일에서 티커 컬럼(symbol/ticker/code 등)을 찾지 못했습니다. "
+            f"현재 컬럼들: {list(df.columns)}"
+        )
+
+    if found_col != "symbol":
+        print(f"[INFO] RS 파일의 티커 컬럼 '{found_col}' 를 'symbol'로 이름 변경합니다.")
+        df = df.rename(columns={found_col: "symbol"})
+
+    return df
+
+
 def main():
     print("=== RS + SMR 병합 시작 (enrich_smr.py) ===")
 
@@ -119,8 +155,8 @@ def main():
     base_rs_path = find_latest_base_rs()
     rs_df = pd.read_csv(base_rs_path)
 
-    if "symbol" not in rs_df.columns:
-        raise ValueError("RS 원본 파일에 'symbol' 컬럼이 없습니다.")
+    # 1-1) 티커 컬럼 이름을 자동 인식해서 'symbol'로 통일
+    rs_df = normalize_symbol_column(rs_df)
 
     # 2) SMR 팩터 로딩 시도
     smr_factors = load_smr_factors()
