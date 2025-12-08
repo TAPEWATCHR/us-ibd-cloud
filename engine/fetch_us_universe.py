@@ -124,14 +124,34 @@ def build_us_universe() -> pd.DataFrame:
     return df
 
 
-def main():
-    universe = build_us_universe()
-    today = datetime.today().strftime("%Y%m%d")
-    file_name = f"us_universe_{today}.csv"
+import datetime
+import os
 
-    universe.to_csv(file_name, index=False, encoding="utf-8-sig")
-    print(f"미국 상장 종목 유니버스 저장 완료: {file_name}")
-    print(f"총 종목 수: {len(universe):,}개")
+def main():
+    """
+    미국 상장 종목 유니버스를 만들어서
+    1) 날짜 붙은 파일: us_universe_YYYYMMDD.csv
+    2) 고정 이름 파일: us_universe.csv
+    두 개를 동시에 저장한다.
+    """
+    today_str = datetime.date.today().strftime("%Y%m%d")
+
+    df = build_us_universe()  # 위쪽에 이미 정의되어 있는 함수라고 가정
+
+    if df is None or df.empty:
+        print("[ERROR] 유니버스가 비어 있습니다. 소스 코드를 확인하세요.")
+        return
+
+    # 1) 날짜 붙은 파일
+    dated_name = f"us_universe_{today_str}.csv"
+    df.to_csv(dated_name, index=False, encoding="utf-8-sig")
+
+    # 2) 항상 같은 이름으로 덮어쓰기 (다른 스크립트들이 이걸 사용)
+    fixed_name = "us_universe.csv"
+    df.to_csv(fixed_name, index=False, encoding="utf-8-sig")
+
+    print(f"미국 상장 종목 유니버스 저장 완료: {dated_name}")
+    print(f"[INFO] 고정 파일도 갱신됨: {fixed_name}")
 
 
 if __name__ == "__main__":

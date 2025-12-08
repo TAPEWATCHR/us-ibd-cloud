@@ -427,6 +427,36 @@ def main():
             use_container_width=True,
             height=350,
         )
+        # --- SMR 전용 요약 테이블 (눈에 잘 보이게 별도 표시) ---
+        st.markdown("#### SMR 요약 뷰")
+
+        smr_cols = [
+            c
+            for c in [
+                "ticker",
+                "rs_onil",
+                "rs_onil_99",
+                "smr_score",
+                "smr_grade",
+                "S(매출성장,%)",
+                "M(이익률,%)",
+                "R(ROE,%)",
+                "group_rank",
+                "group_grade",
+                "group_rs_99",
+                "last_close",
+                "avg_dollar_vol_50(M$)",
+            ]
+            if c in show_df.columns
+        ]
+
+        st.dataframe(
+            show_df[smr_cols],
+            use_container_width=True,
+            height=300,
+        )
+
+
 
         if industry_df is not None and not industry_df.empty:
             st.subheader("산업군 RS / 랭크 / 등급 목록")
