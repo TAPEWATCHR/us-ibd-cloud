@@ -1,31 +1,38 @@
 name: US IBD Daily Engine
 
 on:
+  # 매일 새벽 6시 KST ≒ 전날 21시 UTC
   schedule:
-    # 매일 21:00 UTC (한국시간 KST+9 기준 06:00)
     - cron: "0 21 * * *"
-  workflow_dispatch: {}
+  # 수동 실행도 가능
+  workflow_dispatch:
 
 jobs:
-  run-engine-and-update-data:
+  run-engine:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      # 1) 레포 체크아웃
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2) 파이썬 설치
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 3) 의존성 설치
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
+          else
+            pip install pandas yfinance numpy streamlit plotly requests
           fi
 
+      # 4) 엔진 실행 (유니버스 → 가격 → RS → SMR → 정리)
       - name: Run US IBD engine (RS + Industry RS + SMR)
         working-directory: ./engine
         run: |
@@ -47,6 +54,7 @@ jobs:
           echo "[STEP 6] Clean old summary files"
           python clean_old_files.py
 
+      # 5) engine/ 안에서 최신 rs_onil_all_*_smr.csv / industry_rs_*.csv 찾아서 data/로 복사
       - name: Copy latest CSVs into data
         run: |
           python - << 'PY'
@@ -54,19 +62,19 @@ jobs:
           import glob
           import shutil
 
-          # 현재 위치: 리포지토리 루트 (us-ibd-cloud)
+          # 현재 위치: us-ibd-cloud 레포 루트
           BASE_DIR = os.getcwd()
           ENGINE_DIR = os.path.join(BASE_DIR, "engine")
           DATA_DIR = os.path.join(BASE_DIR, "data")
 
           os.makedirs(DATA_DIR, exist_ok=True)
 
-          # 1) 개별 RS + SMR 최신 파일 찾기
+          # 1) 개별 RS + SMR 최신 파일
           rs_pattern = os.path.join(ENGINE_DIR, "rs_onil_all_*_smr.csv")
           rs_files = sorted(glob.glob(rs_pattern))
 
           if not rs_files:
-              print(f"Error:  {os.path.basename(rs_pattern)} 파일을 engine 디렉터리에서 찾지 못했습니다.")
+              print("Error: rs_onil_all_*_smr.csv 파일을 engine 디렉터리에서 찾지 못했습니다.")
               raise SystemExit(1)
 
           latest_rs = rs_files[-1]
@@ -76,69 +84,32 @@ jobs:
           shutil.copy2(latest_rs, out_rs)
           print(f"[INFO] 최신 RS+SMR 파일 복사 완료: {latest_rs_name} -> {out_rs}")
 
-          # 2) 산업군 RS 최신 파일 찾기 (없으면 경고만 찍고 넘어감)
+          # 2) 산업군 RS 최신 파일 (없으면 경고만)
           ind_pattern = os.path.join(ENGINE_DIR, "industry_rs_*.csv")
           ind_files = sorted(glob.glob(ind_pattern))
 
           if not ind_files:
-              print(f"[WARN] industry_rs_*.csv 파일을 engine 디렉터리에서 찾지 못했습니다. latest_industry_rs.csv는 갱신되지 않습니다.")
+              print("[WARN] industry_rs_*.csv 파일을 engine 디렉터리에서 찾지 못했습니다. latest_industry_rs.csv는 갱신되지 않습니다.")
           else:
               latest_ind = ind_files[-1]
               latest_ind_name = os.path.basename(latest_ind)
               out_ind = os.path.join(DATA_DIR, "latest_industry_rs.csv")
               shutil.copy2(latest_ind, out_ind)
               print(f"[INFO] 최신 산업군 RS 파일 복사 완료: {latest_ind_name} -> {out_ind}")
-
           PY
 
-
-          # 현재 파일(.github/workflows) 기준으로 레포 루트 찾기
-          workflow_dir = os.path.dirname(os.path.abspath(__file__))
-          repo_root = os.path.dirname(os.path.dirname(workflow_dir))
-
-          engine_dir = os.path.join(repo_root, "engine")
-          data_dir = os.path.join(repo_root, "data")
-
-          os.makedirs(data_dir, exist_ok=True)
-
-          # 1) 최신 rs_onil_all_*_smr.csv 찾기
-          smr_pattern = os.path.join(engine_dir, "rs_onil_all_*_smr.csv")
-          smr_files = sorted(glob.glob(smr_pattern))
-          if not smr_files:
-            raise SystemExit("[ERROR] rs_onil_all_*_smr.csv 파일을 찾지 못했습니다.")
-
-          latest_smr = smr_files[-1]
-          target_smr = os.path.join(data_dir, "latest_rs_smr.csv")
-          shutil.copy2(latest_smr, target_smr)
-          print(f"[INFO] latest_rs_smr.csv <= {latest_smr}")
-
-          # 2) 최신 industry_rs_6m_*.csv 찾기
-          ind_pattern = os.path.join(engine_dir, "industry_rs_6m_*.csv")
-          ind_files = sorted(glob.glob(ind_pattern))
-          if not ind_files:
-            print("[WARN] industry_rs_6m_*.csv 파일을 찾지 못했습니다. 산업군 RS는 건너뜁니다.")
-          else:
-            latest_ind = ind_files[-1]
-            target_ind = os.path.join(data_dir, "latest_industry_rs.csv")
-            shutil.copy2(latest_ind, target_ind)
-            print(f"[INFO] latest_industry_rs.csv <= {latest_ind}")
-          PY
-
+      # 6) data/latest_*.csv 변경사항만 커밋 & 푸시
       - name: Commit and push updated data
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git status --porcelain data
+          git add data/latest_rs_smr.csv data/latest_industry_rs.csv || true
 
-          # 변경 사항 없으면 종료
-          if [ -z "$(git.status --porcelain data)" ]; then
-            echo "[INFO] data 폴더에 변경 사항 없음. 커밋/푸시 생략."
-            exit 0
+          # 변경 없으면 커밋/푸시 스킵
+          if git diff --cached --quiet; then
+            echo "[INFO] No data changes to commit."
+          else
+            git commit -m "auto update data $(date +'%Y-%m-%d %H:%M')"
+            git push origin main
           fi
-
-          git add data/latest_rs_smr.csv data/latest_industry_rs.csv
-          git.commit -m "daily engine update (GitHub Actions)"
-          git.push origin ${{ github.ref_name }}
