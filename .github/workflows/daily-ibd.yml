@@ -47,12 +47,50 @@ jobs:
           echo "[STEP 6] Clean old summary files"
           python clean_old_files.py
 
-      - name: Copy latest CSVs into data/ (latest_rs_smr.csv, latest_industry_rs.csv)
+      - name: Copy latest CSVs into data
         run: |
           python - << 'PY'
           import os
           import glob
           import shutil
+
+          # 현재 위치: 리포지토리 루트 (us-ibd-cloud)
+          BASE_DIR = os.getcwd()
+          ENGINE_DIR = os.path.join(BASE_DIR, "engine")
+          DATA_DIR = os.path.join(BASE_DIR, "data")
+
+          os.makedirs(DATA_DIR, exist_ok=True)
+
+          # 1) 개별 RS + SMR 최신 파일 찾기
+          rs_pattern = os.path.join(ENGINE_DIR, "rs_onil_all_*_smr.csv")
+          rs_files = sorted(glob.glob(rs_pattern))
+
+          if not rs_files:
+              print(f"Error:  {os.path.basename(rs_pattern)} 파일을 engine 디렉터리에서 찾지 못했습니다.")
+              raise SystemExit(1)
+
+          latest_rs = rs_files[-1]
+          latest_rs_name = os.path.basename(latest_rs)
+          out_rs = os.path.join(DATA_DIR, "latest_rs_smr.csv")
+
+          shutil.copy2(latest_rs, out_rs)
+          print(f"[INFO] 최신 RS+SMR 파일 복사 완료: {latest_rs_name} -> {out_rs}")
+
+          # 2) 산업군 RS 최신 파일 찾기 (없으면 경고만 찍고 넘어감)
+          ind_pattern = os.path.join(ENGINE_DIR, "industry_rs_*.csv")
+          ind_files = sorted(glob.glob(ind_pattern))
+
+          if not ind_files:
+              print(f"[WARN] industry_rs_*.csv 파일을 engine 디렉터리에서 찾지 못했습니다. latest_industry_rs.csv는 갱신되지 않습니다.")
+          else:
+              latest_ind = ind_files[-1]
+              latest_ind_name = os.path.basename(latest_ind)
+              out_ind = os.path.join(DATA_DIR, "latest_industry_rs.csv")
+              shutil.copy2(latest_ind, out_ind)
+              print(f"[INFO] 최신 산업군 RS 파일 복사 완료: {latest_ind_name} -> {out_ind}")
+
+          PY
+
 
           # 현재 파일(.github/workflows) 기준으로 레포 루트 찾기
           workflow_dir = os.path.dirname(os.path.abspath(__file__))
