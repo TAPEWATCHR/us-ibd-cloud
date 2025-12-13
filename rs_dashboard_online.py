@@ -65,7 +65,6 @@ def normalize_ticker_column(df: pd.DataFrame) -> pd.DataFrame:
         df.rename(columns={"symbol": "ticker"}, inplace=True)
         return df
 
-    # 필요시 다른 후보를 추가할 수 있음
     candidates = [c for c in ["secid", "종목코드"] if c in df.columns]
     if candidates:
         df.rename(columns={candidates[0]: "ticker"}, inplace=True)
@@ -74,6 +73,30 @@ def normalize_ticker_column(df: pd.DataFrame) -> pd.DataFrame:
     raise ValueError(
         f"티커 컬럼(ticker/symbol)을 찾을 수 없습니다. 현재 컬럼: {list(df.columns)}"
     )
+
+
+def calc_rs_grade(rs_val: float) -> str:
+    """
+    오닐식 RS(0~99)를 간단한 등급으로 변환.
+    IBD의 '80 이상 우수' 기준을 반영해서 대략적인 레벨만 본다.
+    """
+    if pd.isna(rs_val):
+        return ""
+    v = float(rs_val)
+    if v >= 95:
+        return "A+"
+    elif v >= 85:
+        return "A"
+    elif v >= 75:
+        return "B+"
+    elif v >= 65:
+        return "B"
+    elif v >= 50:
+        return "C"
+    elif v >= 30:
+        return "D"
+    else:
+        return "E"
 
 
 @st.cache_data(show_spinner=False)
@@ -114,8 +137,7 @@ def load_rs_from_cloud() -> pd.DataFrame:
             f"현재 컬럼: {list(df.columns)}"
         )
 
-    # 정리용 컬럼들 추가/정렬
-    # 숫자형으로 한번 더 캐스팅
+    # 숫자형 컬럼 캐스팅
     num_cols = [
         "last_close",
         "ret_3m",
@@ -139,8 +161,9 @@ def load_rs_from_cloud() -> pd.DataFrame:
     for c in num_cols:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # 날짜는 문자열로 들어오므로, 최근 날짜를 상단에 보이도록 정렬할 때만 사용
-    # 여기서는 last_date를 그대로 두되, 필요할 때만 parse
+    # RS 등급 컬럼 생성
+    df["rs_grade"] = df["rs_onil_99"].apply(calc_rs_grade)
+
     return df
 
 
@@ -157,12 +180,10 @@ def load_industry_from_cloud() -> pd.DataFrame:
         st.warning(f"산업군 RS 데이터를 불러오는 중 문제가 발생했습니다: {e}")
         return pd.DataFrame()
 
-    # group_key가 주요 키
     if "group_key" not in df.columns:
         st.warning("industry_rs 파일에 'group_key' 컬럼이 없습니다.")
         return pd.DataFrame()
 
-    # 숫자형 캐스팅
     for c in ["group_rank", "group_rs_99", "group_rs_100", "avg_ret_6m", "n_members"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -197,22 +218,16 @@ def short_k(x: float) -> str:
 def tradingview_embed_symbol(ticker: str) -> str:
     """
     TradingView 임베드용 심볼 문자열.
-    - 미국 주식 기본 가정: 'NASDAQ:TSLA' 형식. (거래소 정보가 없다면 기본은 'NYSE 또는 NASDAQ' 추정이 어려우니,
-      심볼만으로도 동작하는 위젯 URL을 사용)
+    (간단히 티커만 사용)
     """
-    # 단순하게 심볼만 쓰는 형태의 TV URL로 구성
     return ticker.upper()
 
 
 def render_tradingview_chart(ticker: str):
-    """
-    선택한 ticker에 대해 TradingView 위젯을 iframe으로 임베드.
-    """
+    """선택한 ticker에 대해 TradingView 위젯을 iframe으로 임베드."""
     import streamlit.components.v1 as components
 
     symbol = tradingview_embed_symbol(ticker)
-    # TV 위젯 URL (심플 차트)
-    # 필요하면 interval, theme, studies 등을 나중에 조정 가능
     tv_url = (
         "https://s.tradingview.com/widgetembed/"
         "?symbol={symbol}"
@@ -247,55 +262,110 @@ def main():
     # 데이터 로드
     with st.spinner("RS + SMR 데이터를 불러오는 중입니다..."):
         rs_df = load_rs_from_cloud()
-
     ind_df = load_industry_from_cloud()
 
+    # ------------------------------
     # 사이드바 필터
+    # ------------------------------
     st.sidebar.header("필터")
 
-    # 기본 범위
-    min_price = st.sidebar.number_input("최소 주가(USD)", min_value=0.0, value=15.0, step=1.0)
-    min_dollar_vol = st.sidebar.number_input(
-        "최소 50일 평균 거래대금(USD)", min_value=0.0, value=5_000_000.0, step=1_000_000.0
-    )
-    min_rs = st.sidebar.slider("최소 RS (O'Neil 0~99)", min_value=0, max_value=99, value=80)
-
-    st.sidebar.markdown("---")
-
-    smr_grades_all = ["A", "B", "C", "D", "E"]
-    selected_smr_grades = st.sidebar.multiselect(
-        "SMR 등급 필터", smr_grades_all, default=["A", "B"]
+    # 0) 오닐식 필터 적용 여부
+    use_onil_filters = st.sidebar.checkbox(
+        "오닐 기본 필터 사용 (가격·거래대금·RS·산업군·SMR)",
+        value=True,
     )
 
-    st.sidebar.markdown("---")
-
-    use_industry_filter = st.sidebar.checkbox("산업군 랭크/등급 필터 사용", value=True)
-    max_group_rank = st.sidebar.number_input(
-        "허용 최대 산업군 랭크 (작을수록 상위)", min_value=1, value=50, step=1
-    )
-    allowed_group_grades = st.sidebar.multiselect(
-        "허용 산업군 등급", ["A", "B", "C", "D", "E"], default=["A", "B"]
+    # 1) 표시할 최대 종목 수 (0 = 전체)
+    top_n = st.sidebar.number_input(
+        "표시할 최대 종목 수 (0 = 전체)",
+        min_value=0,
+        max_value=10000,
+        value=0,      # 기본값: 전체
+        step=100,
     )
 
     st.sidebar.markdown("---")
 
-    top_n = st.sidebar.number_input("표시할 최대 종목 수", min_value=10, max_value=500, value=100, step=10)
+    # 오닐 필터 옵션 (ON일 때만 의미 있음)
+    if use_onil_filters:
+        st.sidebar.subheader("오닐식 필터 조건")
 
+        min_price = st.sidebar.number_input(
+            "최소 주가(USD)",
+            min_value=0.0,
+            value=15.0,
+            step=1.0,
+        )
+        min_dollar_vol = st.sidebar.number_input(
+            "최소 50일 평균 거래대금(USD)",
+            min_value=0.0,
+            value=5_000_000.0,
+            step=1_000_000.0,
+        )
+        min_rs = st.sidebar.slider(
+            "최소 RS (O'Neil 0~99)",
+            min_value=0,
+            max_value=99,
+            value=80,
+        )
+
+        smr_grades_all = ["A", "B", "C", "D", "E"]
+        selected_smr_grades = st.sidebar.multiselect(
+            "SMR 등급 필터",
+            smr_grades_all,
+            default=["A", "B"],
+        )
+
+        st.sidebar.markdown("---")
+
+        use_industry_filter = st.sidebar.checkbox(
+            "산업군 랭크/등급 필터 사용",
+            value=True,
+        )
+        max_group_rank = st.sidebar.number_input(
+            "허용 최대 산업군 랭크 (작을수록 상위)",
+            min_value=1,
+            value=50,
+            step=1,
+        )
+        allowed_group_grades = st.sidebar.multiselect(
+            "허용 산업군 등급",
+            ["A", "B", "C", "D", "E"],
+            default=["A", "B"],
+        )
+    else:
+        # 오닐 필터 OFF일 때는 전체 유니버스를 보고 싶다는 의미
+        min_price = 0.0
+        min_dollar_vol = 0.0
+        min_rs = 0
+        selected_smr_grades = ["A", "B", "C", "D", "E"]
+        use_industry_filter = False
+        max_group_rank = 9999
+        allowed_group_grades = ["A", "B", "C", "D", "E"]
+        st.sidebar.info("※ 전체 종목을 보고 싶으면 이 상태로 두고, 상단의 최대 종목 수만 조절하세요.")
+
+    # ------------------------------
     # 필터 적용
+    # ------------------------------
     df = rs_df.copy()
 
-    # 가격 / 거래대금 / RS 필터
-    df = df[df["last_close"] >= min_price]
-    df = df[df["avg_dollar_vol_50"] >= min_dollar_vol]
-    df = df[df["rs_onil_99"] >= min_rs]
+    # 최소한의 sanity filter
+    df = df[df["last_close"] > 0]
+    df = df.dropna(subset=["ticker"])
 
-    # SMR 등급 필터
-    df = df[df["smr_grade"].isin(selected_smr_grades)]
+    # 오닐식 필터 적용
+    if use_onil_filters:
+        df = df[df["last_close"] >= min_price]
+        df = df[df["avg_dollar_vol_50"] >= min_dollar_vol]
+        df = df[df["rs_onil_99"] >= min_rs]
+        df = df[df["smr_grade"].isin(selected_smr_grades)]
 
-    # 산업군 필터 (선택)
-    if use_industry_filter:
-        df = df[df["group_rank"] <= max_group_rank]
-        df = df[df["group_grade"].isin(allowed_group_grades)]
+        if use_industry_filter:
+            df = df[df["group_rank"] <= max_group_rank]
+            df = df[df["group_grade"].isin(allowed_group_grades)]
+
+    # 필터 후 전체 개수
+    total_after_filter = len(df)
 
     # 정렬: RS 상위 → 산업군 RS 상위
     sort_cols = ["rs_onil_99", "group_rs_99"]
@@ -303,22 +373,32 @@ def main():
     if sort_cols:
         df = df.sort_values(sort_cols, ascending=False)
 
-    # 상위 N개만
-    df = df.head(top_n)
+    # 상위 N개로 제한 (0이면 전체)
+    if top_n > 0:
+        df_display = df.head(top_n)
+    else:
+        df_display = df
 
-    # 메인 레이아웃: 상단 요약 + 하단 탭
+    # ------------------------------
+    # 상단 요약
+    # ------------------------------
     st.subheader("요약")
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("필터 후 종목 수", len(df))
+        st.metric("필터 후 전체 종목 수", total_after_filter)
     with col2:
-        if "group_key" in df.columns:
-            st.metric("산업군 수", df["group_key"].nunique())
+        st.metric("표에 표시된 종목 수", len(df_display))
     with col3:
-        st.metric("RS 기준 하한", f"{min_rs}")
+        if use_onil_filters:
+            st.metric("RS 기준 하한", f"{min_rs}")
+        else:
+            st.metric("RS 기준 하한", "필터 없음")
     with col4:
-        st.metric("SMR 등급", ", ".join(selected_smr_grades))
+        if use_onil_filters:
+            st.metric("SMR 등급", ", ".join(selected_smr_grades))
+        else:
+            st.metric("SMR 등급", "전체")
 
     st.markdown("---")
 
@@ -331,30 +411,31 @@ def main():
     with tab_rank:
         st.subheader("필터 적용 후 종목 리스트")
 
-        if df.empty:
-            st.warning("필터 조건에 해당하는 종목이 없습니다. 필터를 완화해 보세요.")
+        if df_display.empty:
+            st.warning("필터 조건에 해당하는 종목이 없습니다. 필터를 완화하거나, 오닐 필터를 꺼보세요.")
         else:
-            # 표시용 테이블
             display_cols = [
                 "ticker",
-                "last_close",
                 "rs_onil_99",
+                "rs_grade",
                 "group_key",
                 "group_rank",
                 "group_grade",
                 "group_rs_99",
+                "last_close",
                 "ret_3m",
                 "ret_6m",
                 "ret_12m",
                 "smr_grade",
+                "smr_score",
                 "sales_growth",
                 "profit_margin",
                 "roe",
                 "avg_dollar_vol_50",
             ]
-            display_cols = [c for c in display_cols if c in df.columns]
+            display_cols = [c for c in display_cols if c in df_display.columns]
 
-            disp = df[display_cols].copy()
+            disp = df_display[display_cols].copy()
 
             if "last_close" in disp.columns:
                 disp["last_close"] = disp["last_close"].apply(format_price)
@@ -376,19 +457,19 @@ def main():
             st.dataframe(
                 disp,
                 use_container_width=True,
-                height=400,
+                height=450,
             )
 
     # ------------------------------
-    # 공통: 종목 선택 위젯
+    # 공통: 종목 선택
     # ------------------------------
     st.markdown("---")
 
-    if df.empty:
-        st.info("차트/재무를 보기 위해서는 먼저 필터를 완화하여 종목이 나오도록 해야 합니다.")
+    if df_display.empty:
+        st.info("차트/재무를 보기 위해서는 먼저 종목 리스트에 최소 1개 이상이 나와야 합니다.")
         return
 
-    tickers = df["ticker"].dropna().astype(str).unique().tolist()
+    tickers = df_display["ticker"].dropna().astype(str).unique().tolist()
     default_ticker = tickers[0] if tickers else None
 
     selected_ticker = st.selectbox(
@@ -397,14 +478,13 @@ def main():
         index=0 if default_ticker else None,
     )
 
-    selected_row = df[df["ticker"] == selected_ticker].head(1)
+    selected_row = df_display[df_display["ticker"] == selected_ticker].head(1)
 
     # ------------------------------
     # 탭 2: 차트 (TradingView)
     # ------------------------------
     with tab_chart:
         st.subheader(f"TradingView 차트 · {selected_ticker}")
-
         st.caption("※ TradingView에서 제공하는 웹 위젯으로 일봉 차트를 확인합니다.")
         render_tradingview_chart(selected_ticker)
 
@@ -419,7 +499,6 @@ def main():
         else:
             row = selected_row.iloc[0]
 
-            # 왼쪽: 기본 정보, 오른쪽: SMR 상세
             c1, c2 = st.columns(2)
 
             with c1:
@@ -427,14 +506,17 @@ def main():
                 st.write(f"- Ticker: `{row['ticker']}`")
                 if "last_close" in row:
                     st.write(f"- 종가: {format_price(row['last_close'])} USD")
+                if "rs_onil_99" in row and not pd.isna(row["rs_onil_99"]):
+                    st.write(f"- RS (0~99): {row['rs_onil_99']:.1f}")
+                if "rs_grade" in row:
+                    st.write(f"- RS 등급: {row['rs_grade']}")
+
                 if "ret_3m" in row:
                     st.write(f"- 3M 수익률: {format_percentage(row['ret_3m'])}")
                 if "ret_6m" in row:
                     st.write(f"- 6M 수익률: {format_percentage(row['ret_6m'])}")
                 if "ret_12m" in row:
                     st.write(f"- 12M 수익률: {format_percentage(row['ret_12m'])}")
-                if "rs_onil_99" in row:
-                    st.write(f"- RS (0~99): {row['rs_onil_99']:.1f}")
 
                 if "group_key" in row:
                     st.markdown("---")
@@ -457,11 +539,11 @@ def main():
                 st.markdown("---")
 
                 if "sales_growth" in row:
-                    st.write(f"- 매출 성장률(최근 연간 기준): {format_percentage(row['sales_growth'])}")
+                    st.write(f"- 매출 성장률(연간): {format_percentage(row['sales_growth'])}")
                 if "profit_margin" in row:
-                    st.write(f"- 이익률(최근 연간 기준): {format_percentage(row['profit_margin'])}")
+                    st.write(f"- 이익률(연간): {format_percentage(row['profit_margin'])}")
                 if "roe" in row:
-                    st.write(f"- ROE(최근 연간 기준): {format_percentage(row['roe'])}")
+                    st.write(f"- ROE(연간): {format_percentage(row['roe'])}")
 
                 st.caption(
                     "※ SMR은 매출 성장(S), 이익률(M), ROE(R) 조합 점수로 계산한 내부 지표입니다."
