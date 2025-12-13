@@ -1,10 +1,9 @@
 name: US IBD Daily Engine
 
 on:
-  # 매일 새벽 6시 KST ≒ 전날 21시 UTC
   schedule:
-    - cron: "0 21 * * *"
-  # 수동 실행도 가능
+    # 매일 07:00 KST ≒ 22:00 UTC
+    - cron: "0 22 * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,28 +14,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1) 레포 체크아웃
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2) 파이썬 설치
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
-      # 3) 의존성 설치
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
+          if [ -f "engine/requirements.txt" ]; then
+            cd engine
+            pip install -r requirements.txt
+          elif [ -f "requirements.txt" ]; then
             pip install -r requirements.txt
           else
-            pip install pandas yfinance numpy streamlit plotly requests
+            pip install pandas numpy yfinance openpyxl requests python-dateutil
           fi
 
-      # 4) 엔진 실행 (유니버스 → 가격 → RS → SMR → 정리)
-          - name: Run US IBD engine (RS + Industry RS + SMR)
+      - name: Run US IBD engine (RS + Industry RS + SMR)
         working-directory: ./engine
         run: |
           echo "[STEP 1] Fetch US universe"
@@ -63,63 +60,19 @@ jobs:
           echo "[STEP 7] Export latest CSVs to data/"
           python export_latest_to_cloud.py
 
-
-      # 5) engine/ 안에서 최신 rs_onil_all_*_smr.csv / industry_rs_*.csv 찾아서 data/로 복사
-      - name: Copy latest CSVs into data
-        run: |
-          python - << 'PY'
-          import os
-          import glob
-          import shutil
-
-          # 현재 위치: us-ibd-cloud 레포 루트
-          BASE_DIR = os.getcwd()
-          ENGINE_DIR = os.path.join(BASE_DIR, "engine")
-          DATA_DIR = os.path.join(BASE_DIR, "data")
-
-          os.makedirs(DATA_DIR, exist_ok=True)
-
-          # 1) 개별 RS + SMR 최신 파일
-          rs_pattern = os.path.join(ENGINE_DIR, "rs_onil_all_*_smr.csv")
-          rs_files = sorted(glob.glob(rs_pattern))
-
-          if not rs_files:
-              print("Error: rs_onil_all_*_smr.csv 파일을 engine 디렉터리에서 찾지 못했습니다.")
-              raise SystemExit(1)
-
-          latest_rs = rs_files[-1]
-          latest_rs_name = os.path.basename(latest_rs)
-          out_rs = os.path.join(DATA_DIR, "latest_rs_smr.csv")
-
-          shutil.copy2(latest_rs, out_rs)
-          print(f"[INFO] 최신 RS+SMR 파일 복사 완료: {latest_rs_name} -> {out_rs}")
-
-          # 2) 산업군 RS 최신 파일 (없으면 경고만)
-          ind_pattern = os.path.join(ENGINE_DIR, "industry_rs_*.csv")
-          ind_files = sorted(glob.glob(ind_pattern))
-
-          if not ind_files:
-              print("[WARN] industry_rs_*.csv 파일을 engine 디렉터리에서 찾지 못했습니다. latest_industry_rs.csv는 갱신되지 않습니다.")
-          else:
-              latest_ind = ind_files[-1]
-              latest_ind_name = os.path.basename(latest_ind)
-              out_ind = os.path.join(DATA_DIR, "latest_industry_rs.csv")
-              shutil.copy2(latest_ind, out_ind)
-              print(f"[INFO] 최신 산업군 RS 파일 복사 완료: {latest_ind_name} -> {out_ind}")
-          PY
-
-      # 6) data/latest_*.csv 변경사항만 커밋 & 푸시
-      - name: Commit and push updated data
+      - name: Commit & push updated data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add data/latest_rs_smr.csv data/latest_industry_rs.csv || true
 
-          # 변경 없으면 커밋/푸시 스킵
           if git diff --cached --quiet; then
-            echo "[INFO] No data changes to commit."
-          else
-            git commit -m "auto update data $(date +'%Y-%m-%d %H:%M')"
-            git push origin main
+            echo "No changes to commit."
+            exit 0
           fi
+
+          git commit -m "auto update data $(date '+%Y-%m-%d %H:%M')"
+          git push origin main
