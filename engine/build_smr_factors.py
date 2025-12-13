@@ -32,24 +32,47 @@ LOG_EVERY = 100           # 몇 종목마다 진행 상황 로그 찍을지
 MAX_TICKERS = None        # None 이면 전체, 숫자를 넣으면 상위 N개만 처리 (테스트 용)
 
 
-def load_universe(path: str) -> list[str]:
+def load_universe(path: str):
+    """
+    us_universe.csv에서 티커 목록을 읽어온다.
+    - symbol / ticker / Symbol / Ticker / 종목코드 등 여러 이름을 허용
+    - 최종적으로는 'symbol' 컬럼으로 통일해서 반환
+    """
     if not os.path.exists(path):
         raise FileNotFoundError(f"유니버스 파일을 찾을 수 없습니다: {path}")
 
     df = pd.read_csv(path)
-    if "symbol" not in df.columns:
-        raise ValueError("us_universe.csv 에 'symbol' 컬럼이 없습니다.")
+
+    # 티커 컬럼 후보들 중 하나를 찾기
+    symbol_col = None
+    for c in ["symbol", "ticker", "Symbol", "Ticker", "종목코드"]:
+        if c in df.columns:
+            symbol_col = c
+            break
+
+    if symbol_col is None:
+        raise ValueError(
+            f"유니버스 파일에서 티커 컬럼(symbol/ticker)을 찾을 수 없습니다. 현재 컬럼: {list(df.columns)}"
+        )
+
+    # 내부적으로는 항상 'symbol'로 통일
+    if symbol_col != "symbol":
+        df = df.rename(columns={symbol_col: "symbol"})
 
     tickers = (
         df["symbol"]
+        .dropna()
         .astype(str)
         .str.strip()
-        .replace("", pd.NA)
+        .replace("", np.nan)
         .dropna()
-        .drop_duplicates()
+        .unique()
         .tolist()
     )
-    print(f"[INFO] SMR용 유니버스 티커 수: {len(tickers)}개")
+
+    if not tickers:
+        raise ValueError("유니버스에서 티커를 한 개도 찾지 못했습니다.")
+
     return tickers
 
 
