@@ -159,8 +159,10 @@ def calc_returns_from_prices(px: pd.DataFrame):
     """
     px: columns 에서 'close' 역할을 하는 컬럼을 찾아
     3, 6, 9, 12개월 수익률과 보조 지표를 계산한다.
-    - 'close' 중복 컬럼(Adj Close 등)도 안전하게 처리
+    - 'close' / 'adj close' 중복 컬럼도 안전하게 처리
+    - 가격 데이터가 아주 적은 종목만 제외하고, 가능한 한 많이 살린다
     """
+    # 날짜 컬럼 정리
     if "date" not in px.columns:
         if "Date" in px.columns:
             px = px.rename(columns={"Date": "date"})
@@ -185,7 +187,6 @@ def calc_returns_from_prices(px: pd.DataFrame):
 
     # 2) close_candidate 가 DataFrame 이면 첫 번째 컬럼만 사용
     if isinstance(close_candidate, pd.DataFrame):
-        # 열이 여러 개일 때 맨 앞 열 사용
         close_series = close_candidate.iloc[:, 0]
     else:
         close_series = close_candidate
@@ -201,9 +202,12 @@ def calc_returns_from_prices(px: pd.DataFrame):
     px = px.sort_values("date").reset_index(drop=True)
 
     valid_close = px["close_used"].notna()
+    n = int(valid_close.sum())
 
-    # 최소 데이터 길이 체크 (대략 3개월 이상 필요)
-    if valid_close.sum() < 80:
+    # 🔎 최소 데이터 길이 조건 완화:
+    #  - 30일 미만: 너무 짧아서 RS 의미 없다고 보고 제외
+    #  - 30일 이상이면 "있는 범위 안에서" 3/6/9/12M 수익률 계산 (없으면 NaN)
+    if n < 30:
         return None
 
     last_idx = px.index[valid_close].max()
@@ -213,6 +217,7 @@ def calc_returns_from_prices(px: pd.DataFrame):
     def ret_n(days: int):
         idx = last_idx - days
         if idx < 0:
+            # 과거 데이터가 모자라면 해당 기간 수익률은 NaN 으로
             return np.nan
         base = px.loc[idx, "close_used"]
         if pd.isna(base) or base == 0:
@@ -231,6 +236,7 @@ def calc_returns_from_prices(px: pd.DataFrame):
     avg_dollar_vol_50 = float(avg_vol_50 * last_close) if not np.isnan(avg_vol_50) else np.nan
 
     # 오닐식 가중 수익률 (12m*3 + 9m*2 + 6m + 3m) / 7
+    # → 이용 가능한 기간만 사용 (예: 새 종목은 3M만 들어갈 수도 있음)
     weights = []
     vals = []
     for r, w in [(ret_12m, 3), (ret_9m, 2), (ret_6m, 1), (ret_3m, 1)]:
@@ -254,6 +260,7 @@ def calc_returns_from_prices(px: pd.DataFrame):
         "avg_vol_50": avg_vol_50,
         "avg_dollar_vol_50": avg_dollar_vol_50,
     }
+
 
 
 def rs_scale(series: pd.Series, max_score: int = 99) -> pd.Series:
