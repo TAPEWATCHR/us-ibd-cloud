@@ -1,9 +1,9 @@
-name: STEP1 - Build Universe (SEC + SIC)
+name: STEP1 - Build Universe (NasdaqTrader + SimFin)
 
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "0 22 * * *"  # 한국시간 오전 7시(UTC 22시). 필요하면 바꿔
+    - cron: "0 22 * * *"  # 한국시간 오전 7시
 
 permissions:
   contents: write
@@ -20,8 +20,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,25 +31,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r engine2/requirements.txt
 
-      # SEC submissions 캐시를 Actions Cache로 보관(다음 실행 때 재사용)
-      - name: Cache SEC submissions
+      - name: Cache SimFin data
         uses: actions/cache@v4
         with:
-          path: engine2/cache/submissions
-          key: sec-submissions-cache-v1
-          restore-keys: sec-submissions-cache-v1
+          path: engine2/cache/simfin
+          key: simfin-cache-v1
+          restore-keys: simfin-cache-v1
 
-      - name: Build universe from SEC
-        env:
-          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      - name: Fetch universe from NasdaqTrader
         run: |
-          python engine2/fetch_universe_sec.py
+          python engine2/fetch_universe_nasdaqtrader.py
 
-      - name: Enrich universe with SIC
+      - name: Enrich universe with SimFin sector/industry
         env:
-          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          SIMFIN_API_KEY: ${{ secrets.SIMFIN_API_KEY }}
         run: |
-          python engine2/enrich_universe_sic.py
+          python engine2/enrich_universe_simfin.py
 
       - name: Commit & push data/universe.csv
         run: |
@@ -59,9 +54,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add data/universe.csv
-
-          # 변경 없으면 종료
           git diff --cached --quiet && echo "No changes to commit" && exit 0
 
-          git commit -m "auto: update universe (SEC + SIC)"
+          git commit -m "auto: update universe (NasdaqTrader + SimFin)"
           git push
