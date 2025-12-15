@@ -1,0 +1,67 @@
+name: STEP1 - Build Universe (SEC + SIC)
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 22 * * *"  # 한국시간 오전 7시(UTC 22시). 필요하면 바꿔
+
+permissions:
+  contents: write
+
+concurrency:
+  group: step1-universe
+  cancel-in-progress: false
+
+jobs:
+  build-universe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r engine2/requirements.txt
+
+      # SEC submissions 캐시를 Actions Cache로 보관(다음 실행 때 재사용)
+      - name: Cache SEC submissions
+        uses: actions/cache@v4
+        with:
+          path: engine2/cache/submissions
+          key: sec-submissions-cache-v1
+          restore-keys: sec-submissions-cache-v1
+
+      - name: Build universe from SEC
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: |
+          python engine2/fetch_universe_sec.py
+
+      - name: Enrich universe with SIC
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: |
+          python engine2/enrich_universe_sic.py
+
+      - name: Commit & push data/universe.csv
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add data/universe.csv
+
+          # 변경 없으면 종료
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+
+          git commit -m "auto: update universe (SEC + SIC)"
+          git push
