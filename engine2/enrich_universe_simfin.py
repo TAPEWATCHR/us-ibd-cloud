@@ -5,15 +5,10 @@ import simfin as sf
 
 
 def norm_ticker(x: str) -> str:
-    """
-    티커 정규화:
-    - 대문자
-    - BRK.B / BF.B 같은 클래스주를 BRK-B 형태로 맞추기
-    - 슬래시 등도 '-'로 통일
-    """
     if x is None:
         return ""
     s = str(x).strip().upper()
+    # 클래스주 표기 통일: BRK.B -> BRK-B
     s = s.replace(".", "-").replace("/", "-")
     return s
 
@@ -41,7 +36,6 @@ def main():
     if not os.path.exists(universe_path):
         raise FileNotFoundError(f"universe.csv not found: {universe_path}")
 
-    # --- SimFin 설정 ---
     api_key = os.getenv("SIMFIN_API_KEY", "").strip() or "free"
     sf.set_api_key(api_key)
 
@@ -58,102 +52,69 @@ def main():
 
     print("[STEP1] Load SimFin companies (US) ...")
     companies = sf.load_companies(market="us")
-
-    # ticker가 index로 올 수도 있어서 안전하게 reset
     if hasattr(companies, "index") and companies.index.name is not None:
         companies = companies.reset_index()
 
     c = _normalize_columns(companies)
 
+    # 디버그: sector/industry 관련 컬럼이 뭔지 먼저 확인
+    related_cols = [col for col in c.columns if ("sector" in col.lower()) or ("industry" in col.lower())]
+    print(f"[DEBUG] companies total cols={len(c.columns)}")
+    print(f"[DEBUG] sector/industry related cols={related_cols}")
+
     ticker_col = _find_col(c, ["ticker", "symbol"])
-    name_col   = _find_col(c, ["company name", "name", "company"])
-    sector_col = _find_col(c, ["sector", "sector name"])
-    ind_col    = _find_col(c, ["industry", "industry name"])
-
-    sector_id_col = _find_col(c, ["sectorid", "sector_id", "sector id"])
-    ind_id_col    = _find_col(c, ["industryid", "industry_id", "industry id"])
-
-    print(f"[DEBUG] companies columns = {list(c.columns)}")
-    print(f"[DEBUG] ticker_col={ticker_col}, sector_col={sector_col}, ind_col={ind_col}, "
-          f"sector_id_col={sector_id_col}, ind_id_col={ind_id_col}")
-
     if ticker_col is None:
-        raise ValueError("SimFin companies에서 ticker/symbol 컬럼을 찾지 못했습니다.")
+        raise ValueError(f"SimFin companies에서 ticker/symbol 컬럼을 못 찾음. cols={list(c.columns)}")
+
+    name_col = _find_col(c, ["company name", "name", "company"])
+
+    # 이름 컬럼 후보
+    sector_name_col = _find_col(c, ["sector", "sector name"])
+    industry_name_col = _find_col(c, ["industry", "industry name"])
+
+    # ID 컬럼 후보(중요!)
+    sector_id_col = _find_col(c, ["sectorid", "sector_id", "sector id"])
+    industry_id_col = _find_col(c, ["industryid", "industry_id", "industry id"])
+
+    print(f"[DEBUG] ticker_col={ticker_col}, sector_name_col={sector_name_col}, industry_name_col={industry_name_col}, "
+          f"sector_id_col={sector_id_col}, industry_id_col={industry_id_col}")
 
     out = pd.DataFrame()
-    out["symbol"] = c[ticker_col].astype(str).str.strip()
-    out["symbol_key"] = out["symbol"].map(norm_ticker)
+    out["symbol_key"] = c[ticker_col].astype(str).str.strip().map(norm_ticker)
 
-    # 회사명(있으면)
-    out["simfin_company_name"] = c[name_col].astype(str).str.strip() if name_col else pd.NA
-
-    # --- Sector/Industry 이름이 있으면 그대로, 없으면 ID → 이름 매핑 ---
-    if sector_col:
-        out["sector"] = c[sector_col].astype(str).str.strip()
+    if name_col:
+        out["simfin_company_name"] = c[name_col].astype(str).str.strip()
     else:
-        out["sector"] = pd.NA
+        out["simfin_company_name"] = pd.NA
 
-    if ind_col:
-        out["industry"] = c[ind_col].astype(str).str.strip()
-    else:
-        out["industry"] = pd.NA
+    # 이름이 있으면 채움, 없으면 NA로 두되 ID라도 확보
+    out["sector"] = c[sector_name_col].astype(str).str.strip() if sector_name_col else pd.NA
+    out["industry"] = c[industry_name_col].astype(str).str.strip() if industry_name_col else pd.NA
 
-    # ID가 있고 이름이 없으면 매핑 시도
-    if (out["sector"].isna().all() or out["industry"].isna().all()) and (sector_id_col or ind_id_col):
-        print("[INFO] Sector/Industry name not found. Try mapping from SectorId/IndustryId...")
+    out["sector_id"] = c[sector_id_col] if sector_id_col else pd.NA
+    out["industry_id"] = c[industry_id_col] if industry_id_col else pd.NA
 
-        if sector_id_col:
-            out["sector_id"] = c[sector_id_col]
-        else:
-            out["sector_id"] = pd.NA
-
-        if ind_id_col:
-            out["industry_id"] = c[ind_id_col]
-        else:
-            out["industry_id"] = pd.NA
-
-        # SimFin 산업/섹터 테이블 로드 (버전에 따라 함수명이 다를 수 있어 try 처리)
-        sectors = None
-        industries = None
-
-        try:
-            sectors = sf.load_sectors(market="us")
-        except Exception as e:
-            print(f"[WARN] sf.load_sectors() 실패: {e}")
-
-        try:
-            industries = sf.load_industries(market="us")
-        except Exception as e:
-            print(f"[WARN] sf.load_industries() 실패: {e}")
-
-        if sectors is not None:
-            sectors = _normalize_columns(sectors.reset_index() if getattr(sectors, "index", None) is not None else sectors)
-            sid_col = _find_col(sectors, ["sectorid", "sector_id", "sector id", "id"])
-            sname_col = _find_col(sectors, ["sector", "sector name", "name"])
-            if sid_col and sname_col:
-                smap = sectors[[sid_col, sname_col]].dropna().drop_duplicates()
-                smap.columns = ["sector_id", "sector_name"]
-                out = out.merge(smap, on="sector_id", how="left")
-                out["sector"] = out["sector"].fillna(out["sector_name"])
-                out = out.drop(columns=["sector_name"], errors="ignore")
-
-        if industries is not None:
-            industries = _normalize_columns(industries.reset_index() if getattr(industries, "index", None) is not None else industries)
-            iid_col = _find_col(industries, ["industryid", "industry_id", "industry id", "id"])
-            iname_col = _find_col(industries, ["industry", "industry name", "name"])
-            if iid_col and iname_col:
-                imap = industries[[iid_col, iname_col]].dropna().drop_duplicates()
-                imap.columns = ["industry_id", "industry_name"]
-                out = out.merge(imap, on="industry_id", how="left")
-                out["industry"] = out["industry"].fillna(out["industry_name"])
-                out = out.drop(columns=["industry_name"], errors="ignore")
+    # 그룹키는 우선 industry_id → 없으면 sector_id → 그래도 없으면 NA
+    out["group_key"] = out["industry_id"].fillna(out["sector_id"])
+    # group_key가 숫자/문자 섞여도 OK. 문자열로 통일
+    out["group_key"] = out["group_key"].astype("string")
 
     out = out.dropna(subset=["symbol_key"]).drop_duplicates(subset=["symbol_key"])
-    print(f"[INFO] SimFin tickers(key) rows: {len(out):,}")
 
-    print("[STEP1] Merge into universe by normalized symbol_key ...")
+    # 채움률 디버그
+    id_sector_fill = out["sector_id"].notna().sum()
+    id_ind_fill = out["industry_id"].notna().sum()
+    group_fill = out["group_key"].notna().sum()
+    name_sector_fill = out["sector"].notna().sum()
+    name_ind_fill = out["industry"].notna().sum()
+
+    print(f"[INFO] SimFin tickers(key) rows: {len(out):,}")
+    print(f"[INFO] sector_name filled: {name_sector_fill:,}, industry_name filled: {name_ind_fill:,}")
+    print(f"[INFO] sector_id filled: {id_sector_fill:,}, industry_id filled: {id_ind_fill:,}, group_key filled: {group_fill:,}")
+
+    print("[STEP1] Merge into universe by symbol_key ...")
     merged = u.merge(
-        out[["symbol_key", "sector", "industry", "simfin_company_name"]],
+        out[["symbol_key", "group_key", "sector", "industry", "sector_id", "industry_id", "simfin_company_name"]],
         on="symbol_key",
         how="left"
     )
@@ -161,11 +122,18 @@ def main():
     merged["industry_updated_at_utc"] = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
     merged.to_csv(universe_path, index=False, encoding="utf-8-sig")
 
+    filled_group = merged["group_key"].notna().sum()
     filled_sector = merged["sector"].notna().sum()
     filled_ind = merged["industry"].notna().sum()
+    filled_sector_id = merged["sector_id"].notna().sum()
+    filled_ind_id = merged["industry_id"].notna().sum()
+
     print(f"[OK] universe.csv enriched: {universe_path}")
-    print(f"Sector filled: {filled_sector:,}/{len(merged):,} ({filled_sector/len(merged)*100:.1f}%)")
-    print(f"Industry filled: {filled_ind:,}/{len(merged):,} ({filled_ind/len(merged)*100:.1f}%)")
+    print(f"group_key filled: {filled_group:,}/{len(merged):,} ({filled_group/len(merged)*100:.1f}%)")
+    print(f"sector name filled: {filled_sector:,}/{len(merged):,} ({filled_sector/len(merged)*100:.1f}%)")
+    print(f"industry name filled: {filled_ind:,}/{len(merged):,} ({filled_ind/len(merged)*100:.1f}%)")
+    print(f"sector_id filled: {filled_sector_id:,}/{len(merged):,} ({filled_sector_id/len(merged)*100:.1f}%)")
+    print(f"industry_id filled: {filled_ind_id:,}/{len(merged):,} ({filled_ind_id/len(merged)*100:.1f}%)")
 
 
 if __name__ == "__main__":
