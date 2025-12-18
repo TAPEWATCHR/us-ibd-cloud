@@ -1,6 +1,0 @@
-
-# generated engine outputs
-engine/*.csv
-engine2/cache/
-data/*.csv
-
