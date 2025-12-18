@@ -48,6 +48,10 @@ jobs:
         run: |
           python engine2/enrich_universe_simfin.py
 
+      - name: Audit industry coverage
+        run: python engine2/audit_universe_industry_coverage.py
+
+
       - name: Commit & push data/universe.csv
         run: |
           git config user.name "github-actions[bot]"
